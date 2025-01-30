@@ -1,85 +1,101 @@
-# Identificación de Violaciones de Principios SOLID y Buenas Prácticas
+# Improving User Management in Spring Boot
 
-## Violaciones Detectadas
+## Issues in the Current Implementation
 
-### 1. Violación del Principio de Responsabilidad Única (SRP)
-- **Descripción**: La clase `UsuarioService` asume múltiples responsabilidades como validación, lógica de negocio, acceso a datos y envío de correos electrónicos, incumpliendo la separación de funciones.
+### 1. Tight Coupling Between Controller and Service
+- The `UserController` directly depends on `UserService`, making it harder to swap out or mock dependencies for testing.
+- Instead of field injection (`@Autowired`), constructor injection should be used to improve testability and immutability.
 
-### 2. Violación del Principio Abierto/Cerrado (OCP)
-- **Descripción**: Para agregar nuevos métodos de autenticación, se requiere modificar directamente `UsuarioService` en lugar de extender su comportamiento mediante abstracciones.
+### 2. Lack of DTO Usage for Responses
+- The `getUser` method returns an entity (`User`) directly, exposing internal database structures to the API consumers.
+- A `UserResponseDto` should be introduced to encapsulate only the necessary fields.
 
-### 3. Violación del Principio de Segregación de Interfaces (ISP)
-- **Descripción**: No se definen interfaces para establecer contratos claros, lo que limita la implementación de alternativas flexibles.
+### 3. Mixing Business Logic in Service Layer
+- The `UserService` includes responsibilities beyond persistence, such as sending emails (`sendWelcomeEmail`).
+- This should be delegated to a dedicated `NotificationService`.
 
-### 4. Violación del Principio de Inversión de Dependencias (DIP)
-- **Descripción**: El controlador depende de la implementación concreta de `UsuarioService`, en lugar de abstracciones, aumentando el acoplamiento.
+### 4. Error Handling Could Be Improved
+- The current implementation throws generic exceptions (`IllegalArgumentException`, `EntityNotFoundException`) without meaningful error messages.
+- Custom exceptions should be introduced and handled using Spring’s `@ControllerAdvice`.
 
-### 5. Encapsulamiento Débil
-- **Descripción**: Datos y comportamientos críticos no están adecuadamente encapsulados, exponiendo detalles internos.
-
-### 6. Falta de Abstracción
-- **Descripción**: No se utilizan capas de abstracción para simplificar la complejidad, dificultando la comprensión y mantenimiento.
-
-### 7. Acoplamiento Fuerte
-- **Descripción**: Las clases tienen dependencias rígidas entre sí, reduciendo su reutilización y escalabilidad.
-
-### 8. Manejo de Excepciones Inadecuado
-- **Descripción**: Las excepciones no se gestionan de forma consistente ni proporcionan información útil para depuración.
-
-### 9. Falta de Pruebas Unitarias
-- **Descripción**: La estructura actual no facilita pruebas automatizadas debido al alto acoplamiento y falta de interfaces.
+### 5. Lack of Validation
+- There is no validation for incoming requests, allowing invalid data to be processed.
+- Spring’s `@Valid` and `@Validated` annotations should be used for request validation.
 
 ---
 
-## Mejoras Propuestas
+## Proposed Improvements
 
-### 1. Separación de Responsabilidades
-- Dividir `UsuarioService` en clases especializadas (ej: `UsuarioLogic`, `UsuarioRepository`, `EmailService`).
+### 1. Use Constructor Injection
+- Replace `@Autowired` field injection with constructor-based injection for better testability.
 
-### 2. Uso de Interfaces
-- Definir contratos con interfaces (ej: `UsuarioRepository`, `AuthService`) para permitir múltiples implementaciones.
+### 2. Introduce Response DTOs
+- Create `UserResponseDto` to decouple database entities from API responses.
 
-### 3. Inversión de Dependencias
-- Aplicar inyección de dependencias con Spring, dependiendo de abstracciones en lugar de implementaciones concretas.
+### 3. Extract Email Sending Logic to a Separate Service
+- Introduce `NotificationService` to handle email logic, improving separation of concerns.
 
-### 4. Refuerzo del Encapsulamiento
-- Ocultar detalles internos mediante modificadores de acceso adecuados y métodos bien definidos.
+### 4. Implement Custom Exception Handling
+- Create custom exceptions like `UserNotFoundException` and a global exception handler using `@ControllerAdvice`.
 
-### 5. Implementación de Abstracciones
-- Crear capas de servicio y repositorio para ocultar complejidad y mejorar legibilidad.
-
-### 6. Reducción de Acoplamiento
-- Utilizar patrones como Dependency Injection y Factory para desacoplar componentes.
-
-### 7. Manejo de Excepciones Estratégico
-- Implementar excepciones personalizadas y mecanismos globales de manejo de errores (ej: `@ControllerAdvice`).
-
-### 8. Pruebas Unitarias
-- Escribir pruebas con JUnit/Mockito para validar comportamientos críticos, aprovechando interfaces para mockear dependencias.
+### 5. Add Request Validation
+- Use `@Valid` in controller methods and define constraints in `UserDto`.
 
 ---
 
-**Ejemplo de Estructura Mejorada**:
+## Example of an Improved Structure
+
+### Updated Controller
 ```java
-// Interfaz para acceso a datos
-public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
-    Optional<Usuario> findByEmail(String email);
-}
+@RestController
+@RequestMapping("/users")
+public class UserController {
 
-// Servicio dedicado a correos
-@Service
-public class EmailService {
-    public void enviarConfirmacion(Usuario usuario) {
-        // Lógica de envío
+    private final UserService userService;
+
+    public UserController(UserService userService) {
+        this.userService = userService;
+    }
+
+    @PostMapping
+    public ResponseEntity<Void> createUser(@Valid @RequestBody UserDto userDto) {
+        userService.createUser(userDto);
+        return ResponseEntity.ok().build();
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<UserResponseDto> getUser(@PathVariable Long id) {
+        return ResponseEntity.ok(userService.getUser(id));
     }
 }
+```
 
-// Servicio principal con dependencias inyectadas
+### Updated Service
+```java
 @Service
-@RequiredArgsConstructor
-public class UsuarioService {
-    private final UsuarioRepository usuarioRepository;
-    private final EmailService emailService;
-    
-    // Métodos enfocados en lógica de negocio
+public class UserService {
+
+    private final UserRepository userRepository;
+    private final NotificationService notificationService;
+
+    public UserService(UserRepository userRepository, NotificationService notificationService) {
+        this.userRepository = userRepository;
+        this.notificationService = notificationService;
+    }
+
+    public void createUser(UserDto userDto) {
+        User user = new User(userDto.getName(), userDto.getEmail(), userDto.getAddress(), userDto.getPhone());
+        userRepository.save(user);
+        notificationService.sendWelcomeEmail(user);
+    }
+
+    public UserResponseDto getUser(Long id) {
+        User user = userRepository.findById(id)
+            .orElseThrow(() -> new UserNotFoundException("User not found"));
+        return new UserResponseDto(user);
+    }
 }
+```
+
+These improvements enhance maintainability, testability, and scalability while following best practices in Spring Boot development.
+

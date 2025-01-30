@@ -21,7 +21,6 @@ public class Weapon {
                 durability = 0;
             }
         }
-        // More nested conditionals...
     }
     
     public void printStatus() {
